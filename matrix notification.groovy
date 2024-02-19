@@ -1,66 +1,57 @@
+import groovy.json.JsonOutput
+import java.net.URLEncoder
+
 metadata {
-    definition (name: "Matrix Messenger", namespace: "hakarune", author: "hakarune") {
-        capability "Actuator"
-        command "sendMessage"
-        
-        attribute "lastMessageSent", "String"
-        attribute "lastMessageSentDateTime", "String"
-        attribute "connectionStatus", "String"
-        attribute "lastLogEvent", "String"
-        
-        input "apiKey", "text", title: "Matrix API Key", required: true
-        input "roomId", "text", title: "Room ID", required: true
-        input "matrixServer", "text", title: "Matrix Server URL", required: true
-        input "testMessage", "text", title: "Test Message", required: false
+    definition(name: "Matrix Notification Device", namespace: "your.namespace", author: "your.author", importUrl: "") {
+        capability "Notification"
+    }
+    preferences {
+        input name: "apiKey", type: "text", title: "Matrix API Key", required: true, defaultValue: ""
+        input name: "roomId", type: "text", title: "Room ID", required: true, defaultValue: ""
+        input name: "matrixServer", type: "text", title: "Matrix Server URL", required: true, defaultValue: "https://matrix.org"
     }
 }
 
-
-def sendMessage(String message) {
-    def accessToken = settings.apiKey
-    def roomId = settings.roomId
-    def serverUrl = settings.matrixServer
-
-    def sendMessage = [
-        roomId: roomId,
-        msgtype: 'm.text',
-        body: message
-    ]
-
+def deviceNotification(text) {
     try {
-        def response = new hubitat.device.HubAction(
-            method: "POST",
-            path: "/_matrix/client/r0/rooms/${URLEncoder.encode(roomId, 'UTF-8')}/send/m.room.message",
-            headers: [
-                Host: serverUrl.split('/')[2],
-                Authorization: "Bearer $accessToken",
-                'Content-Type': 'application/json'
-            ],
-            body: sendMessage as String
-        )
+        def apiKey = settings.apiKey
+        def roomId = settings.roomId
+        def matrixServer = settings.matrixServer
 
-        def hubResponse = sendHubCommand(response)
+        def sendMessage = [
+            msgtype: 'm.text',
+            body: text
+        ]
         
-        if (hubResponse) {
-            if (hubResponse.status == 200) {
-                log.debug "Message sent successfully: ${message}"
-                sendEvent(name: "lastMessageSent", value: message, displayed: true)
-                sendEvent(name: "lastMessageSentDateTime", value: new Date().toString(), displayed: true)
-                sendEvent(name: "connectionStatus", value: "Connected", displayed: true)
-                sendEvent(name: "lastLogEvent", value: "Message sent successfully", displayed: true)
-            } else {
-                log.error "Failed to send message. Status code: ${hubResponse.status}, Response: ${hubResponse.data}"
-                sendEvent(name: "connectionStatus", value: "Disconnected", displayed: true)
-                sendEvent(name: "lastLogEvent", value: "Failed to send message", displayed: true)
-            }
+        // Generate a random message ID
+        def messageId = UUID.randomUUID().toString()
+
+        def response = sendNotification(sendMessage, apiKey, roomId, messageId, matrixServer)
+        if (response.status == 200) {
+            log.debug "Message sent successfully: ${text}"
+            updateStatus("Message sent successfully", "Connected", text)
         } else {
-            log.error "No response received."
-            sendEvent(name: "connectionStatus", value: "Disconnected", displayed: true)
-            sendEvent(name: "lastLogEvent", value: "No response received", displayed: true)
+            log.error "Failed to send message. Status code: ${response.status}, Response: ${response.data}"
+            updateStatus("Failed to send message", "Disconnected", text)
         }
     } catch (Exception e) {
         log.error "Error sending message: ${e.message}"
-        sendEvent(name: "connectionStatus", value: "Disconnected", displayed: true)
-        sendEvent(name: "lastLogEvent", value: "Error sending message", displayed: true)
+        updateStatus("Error sending message", "Disconnected", "")
     }
+}
+
+private sendNotification(message, apiKey, roomId, messageId, matrixServer) {
+    def uri = "${matrixServer}/_matrix/client/r0/rooms/${URLEncoder.encode(roomId, 'UTF-8')}/send/m.room.message/${messageId}?access_token=${apiKey}"
+    def headers = [
+        'Content-Type': 'application/json'
+    ]
+    def body = JsonOutput.toJson(message)
+    
+    httpPut(uri: uri, body: body, headers: headers)
+}
+
+private updateStatus(logEvent, connectionStatus, lastMessage) {
+    sendEvent(name: "lastLogEvent", value: logEvent, displayed: true)
+    sendEvent(name: "connectionStatus", value: connectionStatus, displayed: true)
+    sendEvent(name: "lastMessage", value: lastMessage, displayed: true)
 }
